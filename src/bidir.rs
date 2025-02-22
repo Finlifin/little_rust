@@ -14,13 +14,15 @@ pub enum Type {
         name: String,
         fields: HashMap<String, Type>,
     },
+    Void,
     Unknown, // For type inference placeholders
-    GenericVar(usize),  // Add numeric IDs for type variables
+    // GenericVar(usize),  // Add numeric IDs for type variables
 }
 
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Type::Void => write!(f, "Void"),
             Type::Int => write!(f, "Int"),
             Type::Bool => write!(f, "Bool"),
             Type::Generic(name) => write!(f, "Generic<{}>", name),
@@ -39,7 +41,7 @@ impl std::fmt::Display for Type {
             }
             Type::Struct { name, .. } => write!(f, "Struct<{}>", name),
             Type::Unknown => write!(f, "Unknown"),
-            Type::GenericVar(id) => write!(f, "T{}", id),
+            // Type::GenericVar(id) => write!(f, "T{}", id),
         }
     }
 }
@@ -47,7 +49,7 @@ impl std::fmt::Display for Type {
 // Add type substitution tracking
 #[derive(Debug, Default)]
 struct TypeSubstitution {
-    substitutions: HashMap<usize, Type>,
+    substitutions: HashMap<String, Type>,
 }
 
 impl TypeSubstitution {
@@ -57,18 +59,25 @@ impl TypeSubstitution {
         }
     }
 
-    fn insert(&mut self, var: usize, typ: Type) {
+    fn insert(&mut self, var: String, typ: Type) {
         self.substitutions.insert(var, typ);
     }
 
-    fn get(&self, var: usize) -> Option<&Type> {
+    fn get(&self, var: String) -> Option<&Type> {
         self.substitutions.get(&var)
     }
 
     fn apply(&self, typ: &Type) -> Type {
         match typ {
-            Type::GenericVar(id) => {
-                if let Some(substituted) = self.get(*id) {
+            // Type::GenericVar(id) => {
+            //     if let Some(substituted) = self.get(*id) {
+            //         substituted.clone()
+            //     } else {
+            //         typ.clone()
+            //     }
+            // }
+            Type::Generic(name) => {
+                if let Some(substituted) = self.get(name.clone()) {
                     substituted.clone()
                 } else {
                     typ.clone()
@@ -225,6 +234,7 @@ impl Scope {
     }
 }
 
+#[derive(Debug)]
 pub struct TypeChecker {
     scope_stack: Vec<Scope>,
     pub struct_definitions: HashMap<String, HashMap<String, Type>>,
@@ -238,6 +248,11 @@ impl TypeChecker {
     pub fn new() -> Self {
         let mut module_scope = Scope::new_module();
         if let Scope::Module(ref mut env) = module_scope {
+            // println
+            env.insert("println".to_string(), Type::Function {
+                params: vec![Type::Generic("H".to_string())],
+                return_type: Box::new(Type::Void),
+            });
             // Add builtin operators
             env.insert("+".to_string(), Type::Function {
                 params: vec![Type::Int, Type::Int],
@@ -334,6 +349,15 @@ impl TypeChecker {
     fn get_variable(&self, name: &str) -> Option<Type> {
         for scope in self.scope_stack.iter().rev() {
             if let Some(typ) = scope.get().get(name) {
+                // When we find a struct type, merge it with its definition
+                if let Type::Struct { name: struct_name, .. } = &typ {
+                    if let Some(struct_def) = self.struct_definitions.get(struct_name) {
+                        return Some(Type::Struct {
+                            name: struct_name.clone(),
+                            fields: struct_def.clone(),
+                        });
+                    }
+                }
                 return Some(typ.clone());
             }
         }
@@ -437,11 +461,12 @@ impl TypeChecker {
     }
 
     // Add method to create fresh type variables
-    fn fresh_type_var(&mut self) -> Type {
-        let var = self.next_type_var;
-        self.next_type_var += 1;
-        Type::GenericVar(var)
-    }
+    // fn fresh_type_var(&mut self) -> Type {
+    //     let var = self.next_type_var;
+    //     self.next_type_var += 1;
+    //     // Type::GenericVar(var)
+    //     Type::Generic(var)
+    // }
 
     // Add unification method
     fn unify(&mut self, t1: &Type, t2: &Type) -> TypeResult<()> {
@@ -449,12 +474,29 @@ impl TypeChecker {
         let t2 = self.type_substitutions.apply(t2);
 
         match (&t1, &t2) {
-            (Type::GenericVar(id1), Type::GenericVar(id2)) if id1 == id2 => Ok(()),
-            (Type::GenericVar(id), t) | (t, Type::GenericVar(id)) => {
-                // Occur check would go here in a full implementation
-                self.type_substitutions.insert(*id, t.clone());
+            // (Type::GenericVar(id1), Type::GenericVar(id2)) if id1 == id2 => Ok(()),
+            // (Type::GenericVar(id), t) | (t, Type::GenericVar(id)) => {
+            //     // Perform occur check
+            //     if self.occurs_check(*id, t) {
+            //         return Err(TypeError::Custom(
+            //             format!("Recursive type detected: T{} occurs in {}", id, t)
+            //         ));
+            //     }
+            //     self.type_substitutions.insert(*id, t.clone());
+            //     Ok(())
+            // },
+            // try to unify the types
+            (Type::Generic(name1), Type::Generic(name2)) if name1 == name2 => Ok(()),
+            (Type::Generic(name), t) | (t, Type::Generic(name)) => {
+                // Perform occur check
+                if self.occurs_check(name.clone(), t) {
+                    return Err(TypeError::Custom(
+                        format!("Recursive type detected: {} occurs in {}", name, t)
+                    ));
+                }
+                self.type_substitutions.insert(name.clone(), t.clone());
                 Ok(())
-            }
+            },
             (Type::Function { params: p1, return_type: r1 }, 
              Type::Function { params: p2, return_type: r2 }) => {
                 if p1.len() != p2.len() {
@@ -481,11 +523,30 @@ impl TypeChecker {
             }
             (t1, t2) if t1 == t2 => Ok(()),
             _ => Err(TypeError::TypeMismatch {
-                expected: t1,
-                found: t2,
+                expected: t1.clone(),
+                found: {
+                    dbg!(t1.clone());
+                    dbg!(t2.clone());
+                    t2
+                },
                 context: "type unification".to_string(),
                 location: self.get_current_location(),
             }),
+        }
+    }
+
+    // Add method to check if a type variable occurs in a type
+    fn occurs_check(&self, id: String, typ: &Type) -> bool {
+        match typ {
+            Type::Generic(name) if name == &id => true,
+            Type::Function { params, return_type } => {
+                params.iter().any(|t| self.occurs_check(id.clone(), t)) ||
+                self.occurs_check(id, return_type)
+            },
+            Type::Struct { fields, .. } => {
+                fields.values().any(|t| self.occurs_check(id.clone(), t))
+            },
+            _ => false
         }
     }
 
@@ -635,25 +696,27 @@ impl TypeChecker {
                     }
                     self.infer_statement(last_stmt) // 需要新增此方法
                 } else {
-                    Ok(Type::Unknown)
+                    Ok(Type::Void)
                 }
             }
             Expr::Return(expr) => {
                 self.infer(expr) // Infer type of the return expression
             }
             Expr::Select { base, field } => {
-                match self.infer(base)? {
-                    Type::Struct { fields, .. } => {
-                        match fields.get(field) {
-                            Some(field_type) => Ok(field_type.clone()), // Infer field type
-                            None => Err(TypeError::UnknownField {
-                                struct_name: format!("{:?}", base),
+                let base_type = self.infer(base)?;
+                match base_type {
+                    Type::Struct { name: struct_name, fields } => {
+                        if let Some(field_type) = fields.get(field) {
+                            Ok(field_type.clone())
+                        } else {
+                            Err(TypeError::UnknownField {
+                                struct_name,
                                 field_name: field.clone(),
-                            }),
+                            })
                         }
                     }
                     _ => Err(TypeError::NonStructFieldAccess {
-                        found: self.infer(base)?,
+                        found: base_type,
                     }),
                 }
             }
@@ -683,12 +746,12 @@ impl TypeChecker {
                 if let Some(ref expr) = ret_stmt.return_value {
                     self.check(expr, expected_type)
                 } else {
-                    if *expected_type == Type::Unknown {
+                    if *expected_type == Type::Void {
                         Ok(())
                     } else {
                         Err(TypeError::TypeMismatch {
                             expected: expected_type.clone(),
-                            found: Type::Unknown,
+                            found: Type::Void,
                             context: "return statement".to_string(),
                             location: self.get_current_location(),
                         })
@@ -724,7 +787,7 @@ impl TypeChecker {
                 if let Some(ref expr) = ret_stmt.return_value {
                     self.infer(expr)
                 } else {
-                    Ok(Type::Unknown)
+                    Ok(Type::Void)
                 }
             }
             Statement::If(if_stmt) => self.infer_if_statement(if_stmt),
@@ -795,7 +858,7 @@ impl TypeChecker {
             }
             self.infer_statement(last_stmt)
         } else {
-            Ok(Type::Unknown)
+            Ok(Type::Void)
         }
     }
 
@@ -806,7 +869,7 @@ impl TypeChecker {
     // Add method to instantiate generic types
     fn instantiate_generics(&mut self, typ: &Type) -> Type {
         match typ {
-            Type::Generic(_) => self.fresh_type_var(),
+            // Type::Generic(_) => self.fresh_type_var(),
             Type::Function { params, return_type } => Type::Function {
                 params: params.iter().map(|t| self.instantiate_generics(t)).collect(),
                 return_type: Box::new(self.instantiate_generics(return_type)),

@@ -562,6 +562,7 @@ impl<'a> Parser<'a> {
             | TokenType::LessThan => 30,
             TokenType::Plus | TokenType::Minus => 40,
             TokenType::Star | TokenType::Slash => 50,
+            TokenType::Dot => 60, // Give dot the same precedence as function calls
             _ => 0, // Default precedence for non-operators or lower precedence
         }
     }

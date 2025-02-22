@@ -12,16 +12,14 @@ struct Point<T> {
     y: T
 }
 
-fn main() {
+fn main() -> Void {
     let a: i32 = 10;
     let b: i32 = 20;
     let sum = add(a, b);
     if is_positive(sum) {
         let p: Point<i32> = create_point(sum, 0);
-        return p.x;
-    } else {
-        return 0;
-    }
+        println(p);
+    } 
 }
 
 fn is_positive(n: i32) -> bool {

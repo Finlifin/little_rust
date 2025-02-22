@@ -19,6 +19,7 @@ fn main() -> ParseResult<()> {
             match reuslt {
                 Ok(_) => {
                     println!("Type checking successful!");
+                    dbg!(&type_checker);
                 }
                 Err(err) => {
                     eprintln!("Type checking error: {}", err);
